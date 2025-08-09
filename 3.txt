@@ -1,0 +1,50 @@
+// api/ocr.js
+const withCORS = (fn) => async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  return fn(req, res);
+};
+
+export default withCORS(async function handler(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  try {
+    const { image } = req.body || {};
+    if (!image) return res.status(400).json({ error: 'image (dataURL) is required' });
+
+    const appId = process.env.MATHPIX_APP_ID;
+    const appKey = process.env.MATHPIX_APP_KEY;
+    if (!appId || !appKey) return res.status(500).json({ error: 'OCR keys not set on server' });
+
+    // Mathpix OCR 호출
+    const r = await fetch('https://api.mathpix.com/v3/text', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'app_id': appId,
+        'app_key': appKey
+      },
+      body: JSON.stringify({
+        src: image,
+        formats: ['text', 'data', 'latex_styled'],
+        data_options: { include_asciimath: true, include_latex: true },
+        ocr_settings: {
+          // 수식 인식 강화(줄 구분과 인라인 수식 모두 감지)
+          math_inline_delimiters: ['$', '$']
+        }
+      })
+    });
+
+    const j = await r.json();
+    // 가능한 출력들 중에서 우선순위: latex_styled > data.latex_styled > text
+    const latex = (j.latex_styled || j.data?.latex_styled || '').trim();
+    const text = (j.text || '').trim();
+
+    return res.json({ latex, text, raw: j });
+  } catch (e) {
+    console.error('[OCR] error', e);
+    return res.status(500).json({ error: 'OCR server error' });
+  }
+});
